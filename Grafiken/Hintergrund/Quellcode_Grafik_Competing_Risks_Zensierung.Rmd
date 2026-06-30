@@ -1,0 +1,230 @@
+---
+title: "censored_competing_plot"
+output: html_document
+---
+
+```{r}
+# this code was generated with the help of ChatGPT o4 mini high
+library(ggplot2)
+library(grid)
+
+# ----------------------------------------------------------------------------
+# 1) Original data (English labels)
+# ----------------------------------------------------------------------------
+df_obs <- data.frame(
+  patient = c("Patient 1", "Patient 2", "Patient 3", 
+              "Patient 4", "Patient 5", "Patient 6"),
+  start   = c(0, 0, 0, 0, 0, 0),
+  end     = c(10, 20, 30, 10, 30, 5),
+  event   = c("Discharge", "Death", "Censored", 
+              "Discharge", "Censored", "Death")
+)
+
+df_ext <- data.frame(
+  patient = c("Patient 4", "Patient 5"),
+  start   = c(10, 30),
+  end     = c(20, 40),
+  event   = c("Death", "Death")
+)
+
+# ----------------------------------------------------------------------------
+# 2) Swap old Patient 3 ↔ old Patient 4
+# ----------------------------------------------------------------------------
+swap_labels <- function(x) {
+  x <- ifelse(x == "Patient 3", "TMP", x)
+  x <- ifelse(x == "Patient 4", "Patient 3", x)
+  x <- ifelse(x == "TMP",       "Patient 4", x)
+  x
+}
+
+df_obs$patient <- swap_labels(df_obs$patient)
+df_ext$patient <- swap_labels(df_ext$patient)
+
+# ----------------------------------------------------------------------------
+# 3) Rename the event labels to German
+# ----------------------------------------------------------------------------
+rename_event <- function(x) {
+  ifelse(x == "Death", "Tod",
+         ifelse(x == "Censored", "Zensiert",
+                ifelse(x == "Discharge", "Entlassen", x)))
+}
+
+df_obs$event <- rename_event(df_obs$event)
+df_ext$event <- rename_event(df_ext$event)
+
+# ----------------------------------------------------------------------------
+# 4) Adjust endpoints:
+#     - If a patient has the event "Entlassen" on day 10, change that to day 12.
+#     - If a patient has the event "Tod" on day 20, change that to day 25.
+#     - Additionally, change the death event of Patient 3 (in df_ext) to day 25.
+# ----------------------------------------------------------------------------
+df_obs$end[df_obs$event == "Entlassen" & df_obs$end == 10] <- 12
+df_obs$end[df_obs$event == "Tod" & df_obs$end == 20] <- 25
+df_ext$end[df_ext$patient == "Patient 3" & df_ext$event == "Tod" & df_ext$end == 20] <- 25
+
+# ----------------------------------------------------------------------------
+# 5) Analysis color logic
+# ----------------------------------------------------------------------------
+df_obs$analysis <- ifelse(df_obs$event == "Zensiert",
+                          "Nicht Berücksichtigt",  # darkgrey
+                          "Berücksichtigt")        # black
+df_ext$analysis <- "Nicht Berücksichtigt"
+
+# ----------------------------------------------------------------------------
+# 6) Override color logic for specific segments => analysis2
+#    (makes Patient 4 + first arrow of Patient 5 black; 
+#     though we will remove Patient 4 soon, shown here for completeness)
+# ----------------------------------------------------------------------------
+df_obs$analysis2 <- with(
+  df_obs,
+  ifelse(
+    patient == "Patient 4" | (patient == "Patient 5" & end == 30),
+    "Berücksichtigt",
+    ifelse(event == "Zensiert", "Nicht Berücksichtigt", "Berücksichtigt")
+  )
+)
+
+df_ext$analysis2 <- df_ext$analysis
+
+# ----------------------------------------------------------------------------
+# 7) Remove Patient 4 entirely from the data
+# ----------------------------------------------------------------------------
+df_obs <- subset(df_obs, patient != "Patient 4")
+df_ext <- subset(df_ext, patient != "Patient 4")
+
+# ----------------------------------------------------------------------------
+# 8) Rename Patient 5 -> 4 and Patient 6 -> 5
+# ----------------------------------------------------------------------------
+# Convert to character so we can modify in place
+df_obs$patient <- as.character(df_obs$patient)
+df_obs$patient[df_obs$patient == "Patient 5"] <- "Patient 4"
+df_obs$patient[df_obs$patient == "Patient 6"] <- "Patient 5"
+
+df_ext$patient <- as.character(df_ext$patient)
+df_ext$patient[df_ext$patient == "Patient 5"] <- "Patient 4"
+df_ext$patient[df_ext$patient == "Patient 6"] <- "Patient 5"
+
+# ----------------------------------------------------------------------------
+# 9) Define new factor levels for the updated patient labels
+#    Now we have: Patient 1,2,3,4,5 (since old Patient 4 is removed)
+# ----------------------------------------------------------------------------
+ascending_levels <- c("Patient 1", "Patient 2", "Patient 3", "Patient 4", "Patient 5")
+df_obs$patient <- factor(df_obs$patient, levels = ascending_levels)
+df_ext$patient <- factor(df_ext$patient, levels = ascending_levels)
+
+# ----------------------------------------------------------------------------
+# 10) Split intervals at day=9: from 0-9 => forced grey, after 9 => old logic
+#     We'll store the new color in "analysis3"
+# ----------------------------------------------------------------------------
+split_segments <- function(df) {
+  out <- data.frame()
+  
+  for (i in seq_len(nrow(df))) {
+    row <- df[i, ]
+    st  <- row$start
+    en  <- row$end
+    
+    # The old color logic (black/grey) is in "analysis2"
+    old_col <- row$analysis2
+    
+    if (en <= 9) {
+      # Entire segment is within [0,9]
+      row$analysis3 <- "Initial (0-9)"
+      out <- rbind(out, row)
+    } else if (st >= 9) {
+      # Entire segment is after 9
+      row$analysis3 <- old_col
+      out <- rbind(out, row)
+    } else {
+      # st < 9 < en => split into two segments
+      row1 <- row
+      row1$end       <- 9
+      row1$analysis3 <- "Initial (0-9)"
+      
+      row2 <- row
+      row2$start     <- 9
+      # row2$end remains the same
+      row2$analysis3 <- old_col
+      
+      out <- rbind(out, row1, row2)
+    }
+  }
+  out
+}
+
+df_obs2 <- split_segments(df_obs)
+df_ext2 <- split_segments(df_ext)
+
+# ----------------------------------------------------------------------------
+# 11) Plot using "analysis3" for line color and add labels to the dotted lines
+# ----------------------------------------------------------------------------
+censored_competing_plot <- ggplot() +
+  # Extended lines
+  geom_segment(
+    data = df_ext2,
+    aes(x = start, xend = end, y = patient, yend = patient, color = analysis3),
+    size = 1.5,
+    arrow = arrow(length = unit(0.2, "cm"), ends = "last", type = "closed")
+  ) +
+  # Observed lines
+  geom_segment(
+    data = df_obs2,
+    aes(x = start, xend = end, y = patient, yend = patient, color = analysis3),
+    size = 1.5,
+    arrow = arrow(length = unit(0.2, "cm"), ends = "last", type = "closed")
+  ) +
+  # Manual color scale: "Initial (0-9)" is plotted but hidden in legend
+  scale_color_manual(
+    name = "Modellierung",
+    values = c(
+      "Initial (0-9)" = "darkgrey",
+      "Berücksichtigt" = "black",
+      "Nicht Berücksichtigt" = "darkgrey"
+    ),
+    breaks = c("Berücksichtigt", "Nicht Berücksichtigt")  # hide "Initial (0-9)"
+  ) +
+  # Endpoints (still from original df_obs, df_ext)
+  geom_point(
+    data = df_obs,
+    aes(x = end, y = patient, fill = event),
+    shape = 21, color = "black", size = 3
+  ) +
+  geom_point(
+    data = df_ext,
+    aes(x = end, y = patient, fill = event),
+    shape = 21, color = "black", size = 3
+  ) +
+  # Fill scale for endpoints
+  scale_fill_manual(
+    name = "Ereignis",
+    values = c("Entlassen" = "darkblue", "Tod" = "red", "Zensiert" = "purple")
+  ) +
+  # Event labels
+  geom_text(
+    data = df_obs,
+    aes(x = end, y = patient, label = event),
+    hjust = -0.1, vjust = -0.5, size = 4, color = "black"
+  ) +
+  geom_text(
+    data = df_ext,
+    aes(x = end, y = patient, label = event),
+    hjust = -0.1, vjust = -0.5, size = 4, color = "black"
+  ) +
+  # Dotted lines at day 9 and day 30 with labels
+  geom_vline(xintercept = 9,  linetype = "dotted") +
+  geom_vline(xintercept = 30, linetype = "dotted") +
+  # Add horizontal labels to the vertical lines
+  annotate("text", x = 9, y = 5.5, label = "Tag 9", angle = 0, vjust = -0.5, size = 4, color = "black") +
+  annotate("text", x = 30, y = 5.5, label = "Tag 30", angle = 0, vjust = -0.5, size = 4, color ="black") +
+  scale_x_continuous(limits = c(0, 50)) +
+  labs(x = "Tag", y = NULL) +
+  theme_minimal(base_size = 14) +
+  # Reverse so "Patient 1" is top
+  scale_y_discrete(limits = rev(ascending_levels)) +
+  expand_limits(y = length(ascending_levels) + 1)
+
+# Save the plot as a PNG file
+#ggsave("censored_competing_plot.png", plot = censored_competing_plot, width = 8, height = 6, dpi = 300)
+
+```
+

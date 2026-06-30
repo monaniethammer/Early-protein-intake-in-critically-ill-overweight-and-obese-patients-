@@ -1,0 +1,580 @@
+---
+title: "Tables_Report"
+output: html_document
+---
+
+
+
+```{r}
+# this file was coded with help of ChatGPT o4 mini high
+library(data.table)
+library(gridExtra)
+library(grid)
+library(here)
+library(dplyr)
+library(tidyr)
+data_original <- readRDS(here("Daten", "Daten_verarbeitet", "data_overweight_cens.rds"))
+data_overweight_unique <- data_original %>% filter(Study_Day == 1)
+dt <- as.data.table(data_overweight_unique)
+```
+
+```{r}
+# Number of Patients died between 4 and 30 days (event <= 30 and PatientDied = 1)
+result_died <- dt[event <= 30 & PatientDied == 1]
+nrow(result_died)
+nrow(result_died)/nrow(dt)
+```
+
+```{r}
+# Number of Patients discharged alive between 4 and 30 days (event <= 30 and PatientDischarged = 1)
+result_discharged <- dt[event <= 30 & PatientDischarged == 1]
+nrow(result_discharged)
+nrow(result_discharged)/nrow(dt)
+```
+
+```{r}
+# Number of Patients still hospitalized after 30 days (event > 30)
+result_survived <- dt[event > 30]
+nrow(result_survived)
+nrow(result_survived)/nrow(dt)
+```
+
+```{r}
+
+# sanity check
+1801 + 4556 + 2711 == nrow(dt)
+
+```
+
+
+
+```{r}
+
+# 4) Summarise by Year
+summary_by_year <- dt[, .(
+  n         = .N,
+  Percent   = round(.N / nrow(dt) * 100, 1),
+  Mort30Day = round(mean((PatientDied == 1 & event <= 30), na.rm = TRUE) * 100, 1)
+), by = Year][order(Year)]
+
+sum(summary_by_year$n) == nrow(dt)
+sum(summary_by_year$Percent) == 100
+weighted.mean(summary_by_year$Mort30Day, w = summary_by_year$n)
+
+# Rename columns
+setnames(
+  summary_by_year,
+  old = c("Year", "n", "Percent", "Mort30Day"),
+  new = c("Jahr","n", "Prozent", "30-Tage-Krankenhausmortalität (%)")
+)
+
+# Turn your data into a table grob
+tbl <- tableGrob(summary_by_year, rows = NULL)
+
+# measure it (in inches)
+table_w <- convertWidth(sum(tbl$widths),  "inches", valueOnly = TRUE)
+table_h <- convertHeight(sum(tbl$heights),"inches", valueOnly = TRUE)
+
+# Save as PNG
+png(
+  filename = "summary_by_year_table.png",
+  width    = table_w,   # in inches
+  height   = table_h,   # in inches
+  units    = "in",      # interpret width/height in inches
+  res      = 300        # DPI
+)
+
+grid.newpage()
+grid.draw(tbl)
+dev.off()
+
+# 5) View
+print(summary_by_year)
+
+```
+
+```{r}
+summary_by_gender <- dt[, .(
+  n         = .N,
+  Percent   = round(.N / nrow(dt) * 100, 1),
+  Mort30Day = round(mean(PatientDied == 1 & event <= 30, na.rm = TRUE) * 100, 1)
+), by = Gender][order(Gender)]
+
+sum(summary_by_gender$n) == nrow(dt)
+sum(summary_by_gender$Percent) == 100
+weighted.mean(summary_by_gender$Mort30Day, w = summary_by_gender$n)
+
+# Rename columns
+setnames(
+  summary_by_gender,
+  old = c("Gender", "n", "Percent", "Mort30Day"),
+  new = c("Geschlecht","n", "Prozent", "30-Tage-Krankenhausmortalität (%)")
+)
+
+# Turn your data into a table grob
+tbl <- tableGrob(summary_by_gender, rows = NULL)
+
+# measure it (in inches)
+table_w <- convertWidth(sum(tbl$widths),  "inches", valueOnly = TRUE)
+table_h <- convertHeight(sum(tbl$heights),"inches", valueOnly = TRUE)
+
+# Save as PNG
+png(
+  filename = "summary_by_gender_table.png",
+  width    = table_w,   # in inches
+  height   = table_h,   # in inches
+  units    = "in",      # interpret width/height in inches
+  res      = 300        # DPI
+)
+grid.newpage()
+grid.draw(tbl)
+dev.off()
+
+print(summary_by_gender)
+
+```
+```{r}
+# 2) Create a Ventilation‐day category
+dt[, VentCat := fcase(
+  DaysMechVent <= 1, "1 - 24h",      # 0 up through 1 day
+  DaysMechVent <= 2, "25 - 48h",      # >1 up through 2 days
+  DaysMechVent  > 2, "> 48 h",       # more than 2 days
+  default = NA_character_
+)]
+
+
+# 3) (Optional) ensure the factor levels are in the right order
+dt[, VentCat := factor(VentCat, levels = c("1 - 24h","25 - 48h","> 48 h"))]
+
+
+# 5) Summarise by VentCat
+summary_by_vent <- dt[, .(
+  n         = .N,
+  Percent   = round(.N / nrow(dt) * 100, 1),
+  Mort30Day = round(mean(PatientDied == 1 & event <= 30, na.rm = TRUE) * 100, 1)
+), by = VentCat][order(VentCat)]
+
+sum(summary_by_vent$n) == nrow(dt)
+sum(summary_by_vent$Percent) == 100
+weighted.mean(summary_by_vent$Mort30Day, w = summary_by_vent$n)
+
+# Rename columns
+setnames(
+  summary_by_vent,
+  old = c("VentCat", "n", "Percent", "Mort30Day"),
+  new = c("Dauer der mechanischen Beatmung","n", "Prozent", "30-Tage-Krankenhausmortalität (%)")
+)
+
+# Turn your data into a table grob
+tbl <- tableGrob(summary_by_vent, rows = NULL)
+
+# measure it (in inches)
+table_w <- convertWidth(sum(tbl$widths),  "inches", valueOnly = TRUE)
+table_h <- convertHeight(sum(tbl$heights),"inches", valueOnly = TRUE)
+
+# Save as PNG
+png(
+  filename = "summary_by_vent_table.png",
+  width    = table_w,   # in inches
+  height   = table_h,   # in inches
+  units    = "in",      # interpret width/height in inches
+  res      = 300        # DPI
+)
+grid.table(summary_by_vent, rows = NULL)
+
+# close the device
+dev.off()
+
+print(summary_by_vent)
+```
+
+```{r}
+
+# (Optional) turn OralIntake2_4 into an ordered factor
+dt[, OralDays := factor(OralIntake2_4,
+                            levels = 0:3,
+                            labels = c("0","1","2","3"))]
+
+
+# summarise by OralDays
+summary_by_oral <- dt[, .(
+  n         = .N,
+  Percent   = round(.N / nrow(dt) * 100, 1),
+  Mort30Day = round(mean(PatientDied == 1 & event <= 30, na.rm = TRUE) * 100, 1)
+), by = OralDays][order(OralDays)]
+
+sum(summary_by_oral$n) == nrow(dt)
+sum(summary_by_oral$Percent) == 100
+weighted.mean(summary_by_oral$Mort30Day, w = summary_by_oral$n)
+
+# Rename columns
+setnames(
+  summary_by_oral,
+  old = c("OralDays", "n", "Percent", "Mort30Day"),
+  new = c("Tage mit oraler Aufnahme","n", "Prozent", "30-Tage-Krankenhausmortalität (%)")
+)
+
+# Turn your data into a table grob
+tbl <- tableGrob(summary_by_oral, rows = NULL)
+
+# measure it (in inches)
+table_w <- convertWidth(sum(tbl$widths),  "inches", valueOnly = TRUE)
+table_h <- convertHeight(sum(tbl$heights),"inches", valueOnly = TRUE)
+
+# # Save as PNG
+png(
+  filename = "summary_by_oral_table.png",
+  width    = table_w,   # in inches
+  height   = table_h,   # in inches
+  units    = "in",      # interpret width/height in inches
+  res      = 300        # DPI
+)
+grid.table(summary_by_oral, rows = NULL)
+
+# close the device
+dev.off()
+
+print(summary_by_oral)
+
+```
+
+
+
+```{r}
+
+# 2) turn Propofol2_4 into a factor for nice ordering (adjust levels if there are other values)
+dt[, PropDays := factor(Propofol2_4,
+                            levels = sort(unique(Propofol2_4)),
+                            labels = as.character(sort(unique(Propofol2_4))))]
+
+
+# 4) summarise by PropDays
+summary_by_propofol <- dt[, .(
+  n         = .N,
+  Percent   = round(.N / nrow(dt) * 100, 1),
+  Mort30Day = round(mean(PatientDied == 1 & event <= 30, na.rm = TRUE) * 100, 1)
+), by = PropDays][order(PropDays)]
+
+sum(summary_by_propofol$n) == nrow(dt)
+sum(summary_by_propofol$Percent) == 100
+weighted.mean(summary_by_propofol$Mort30Day, w = summary_by_propofol$n)
+
+setnames(
+  summary_by_propofol,
+  old = c("PropDays", "n", "Percent", "Mort30Day"),
+  new = c("Tage mit Propofoltherapie","n", "Prozent", "30-Tage-Krankenhausmortalität (%)")
+)
+
+# Turn your data into a table grob
+tbl <- tableGrob(summary_by_propofol, rows = NULL)
+
+# measure it (in inches)
+table_w <- convertWidth(sum(tbl$widths),  "inches", valueOnly = TRUE)
+table_h <- convertHeight(sum(tbl$heights),"inches", valueOnly = TRUE)
+
+# # Save as PNG
+png(
+  filename = "summary_by_propofol_table.png",
+  width    = table_w,   # in inches
+  height   = table_h,   # in inches
+  units    = "in",      # interpret width/height in inches
+  res      = 300        # DPI
+)
+grid.table(summary_by_propofol, rows = NULL)
+
+# close the device
+dev.off()
+
+# 5) inspect
+print(summary_by_propofol)
+
+```
+
+```{r}
+# PN2_4
+dt[, PNdays := factor(PN2_4,
+                          levels = sort(unique(PN2_4)),
+                          labels = as.character(sort(unique(PN2_4))))]
+
+
+summary_PN2_4 <- dt[, .(
+  n         = .N,
+  Percent   = round(.N / nrow(dt) * 100, 1),
+  Mort30Day = round(mean(PatientDied == 1 & event <= 30, na.rm = TRUE) * 100, 1)
+), by = PNdays][order(PNdays)]
+
+sum(summary_PN2_4$n) == nrow(dt)
+sum(summary_PN2_4$Percent) == 100
+weighted.mean(summary_PN2_4$Mort30Day, w = summary_PN2_4$n)
+
+setnames(
+  summary_PN2_4,
+  old = c("PNdays", "n", "Percent", "Mort30Day"),
+  new = c("Tage mit parenteraler Ernährung","n", "Prozent", "30-Tage-Krankenhausmortalität (%)")
+)
+
+# Turn your data into a table grob
+tbl <- tableGrob(summary_PN2_4, rows = NULL)
+
+# measure it (in inches)
+table_w <- convertWidth(sum(tbl$widths),  "inches", valueOnly = TRUE)
+table_h <- convertHeight(sum(tbl$heights),"inches", valueOnly = TRUE)
+
+# # Save as PNG
+png(
+  filename = "summary_by_PN2_4_table.png",
+  width    = table_w,   # in inches
+  height   = table_h,   # in inches
+  units    = "in",      # interpret width/height in inches
+  res      = 300        # DPI
+)
+grid.table(summary_PN2_4, rows = NULL)
+
+# close the device
+dev.off()
+
+print(summary_PN2_4)
+```
+
+```{r}
+# EN2_4
+dt[, ENdays := factor(EN2_4,
+                          levels = sort(unique(EN2_4)),
+                          labels = as.character(sort(unique(EN2_4))))]
+summary_EN2_4 <- dt[, .(
+  n         = .N,
+  Percent   = round(.N / nrow(dt) * 100, 1),
+  Mort30Day = round(mean(PatientDied == 1 & event <= 30, na.rm = TRUE) * 100, 1)
+), by = ENdays][order(ENdays)]
+
+sum(summary_EN2_4$n) == nrow(dt)
+sum(summary_EN2_4$Percent) == 100
+weighted.mean(summary_EN2_4$Mort30Day, w = summary_EN2_4$n)
+
+setnames(
+  summary_EN2_4,
+  old = c("ENdays", "n", "Percent", "Mort30Day"),
+  new = c("Tage mit enteraler Ernährung","n", "Prozent", "30-Tage-Krankenhausmortalität (%)")
+)
+
+# Turn your data into a table grob
+tbl <- tableGrob(summary_EN2_4, rows = NULL)
+
+# measure it (in inches)
+table_w <- convertWidth(sum(tbl$widths),  "inches", valueOnly = TRUE)
+table_h <- convertHeight(sum(tbl$heights),"inches", valueOnly = TRUE)
+
+# # Save as PNG
+png(
+  filename = "summary_by_EN2_4_table.png",
+  width    = table_w,   # in inches
+  height   = table_h,   # in inches
+  units    = "in",      # interpret width/height in inches
+  res      = 300        # DPI
+)
+grid.table(summary_EN2_4, rows = NULL)
+
+# close the device
+dev.off()
+
+print(summary_EN2_4)
+```
+
+```{r}
+# (Optional) turn AdmCatID into a factor with a logical order
+dt[, AdmCat := factor(AdmCatID,
+                          levels = c("Medical",
+                                     "Surgical/Emeregency",
+                                     "Surgical/Elective"))]
+levels(dt$AdmCat)[ levels(dt$AdmCat) == "Surgical/Emeregency" ] <- 
+  "Surgical/Emergency"
+
+# summarise by Admission Category
+summary_by_admcat <- dt[, .(
+  n         = .N,
+  Percent   = round(.N / nrow(dt) * 100, 1),
+  Mort30Day = round(mean(PatientDied == 1 & event <= 30, na.rm = TRUE) * 100, 1)
+), by = AdmCat][order(AdmCat)]
+
+sum(summary_by_admcat$n) == nrow(dt)
+sum(summary_by_admcat$Percent) == 100
+weighted.mean(summary_by_admcat$Mort30Day, w = summary_by_admcat$n)
+
+setnames(
+  summary_by_admcat,
+  old = c("AdmCat", "n", "Percent", "Mort30Day"),
+  new = c("Aufnahmekategorie","n", "Prozent", "30-Tage-Krankenhausmortalität (%)")
+)
+
+# Turn your data into a table grob
+tbl <- tableGrob(summary_by_admcat, rows = NULL)
+
+# measure it (in inches)
+table_w <- convertWidth(sum(tbl$widths),  "inches", valueOnly = TRUE)
+table_h <- convertHeight(sum(tbl$heights),"inches", valueOnly = TRUE)
+
+# # Save as PNG
+png(
+  filename = "summary_by_admcat_table.png",
+  width    = table_w,   # in inches
+  height   = table_h,   # in inches
+  units    = "in",      # interpret width/height in inches
+  res      = 300        # DPI
+)
+grid.table(summary_by_admcat, rows = NULL)
+
+# close the device
+dev.off()
+
+print(summary_by_admcat)
+```
+
+```{r}
+# 2) (Optional) make DiagID2 an ordered factor if you want a specific order
+dt[, DiagCat := factor(DiagID2,
+                           levels = sort(unique(DiagID2)))]
+
+
+# 4) summarise by DiagCat
+summary_by_diag <- dt[, .(
+  n         = .N,
+  Percent   = round(.N / nrow(dt) * 100, 1),
+  Mort30Day = round(mean(PatientDied == 1 & event <= 30, na.rm = TRUE) * 100, 1)
+), by = DiagCat][order(DiagCat)]
+
+sum(summary_by_diag$n) == nrow(dt)
+sum(summary_by_diag$Percent) == 100
+weighted.mean(summary_by_diag$Mort30Day, w = summary_by_diag$n)
+
+setnames(
+  summary_by_diag,
+  old = c("DiagCat", "n", "Percent", "Mort30Day"),
+  new = c("Aufnahmediagnose","n", "Prozent", "30-Tage-Krankenhausmortalität (%)")
+)
+
+# Turn your data into a table grob
+tbl <- tableGrob(summary_by_diag, rows = NULL)
+
+# measure it (in inches)
+table_w <- convertWidth(sum(tbl$widths),  "inches", valueOnly = TRUE)
+table_h <- convertHeight(sum(tbl$heights),"inches", valueOnly = TRUE)
+
+# # Save as PNG
+png(
+  filename = "summary_by_diag_table.png",
+  width    = table_w,   # in inches
+  height   = table_h,   # in inches
+  units    = "in",      # interpret width/height in inches
+  res      = 300        # DPI
+)
+grid.table(summary_by_diag, rows = NULL)
+
+# close the device
+dev.off()
+
+# view the result
+print(summary_by_diag)
+```
+
+```{r}
+# 1) define a little helper that returns the six stats for a numeric vector
+calc_stats <- function(x) {
+  c(
+    Minimum      = min(x,              na.rm = TRUE),
+    `1. Quartil` = unname(quantile(x, 0.25,    na.rm = TRUE)),
+    Median       = median(x,           na.rm = TRUE),
+    Mittelwert   = mean(x,             na.rm = TRUE),
+    `3. Quartil` = unname(quantile(x, 0.75,    na.rm = TRUE)),
+    Maximum      = max(x,              na.rm = TRUE)
+  )
+}
+
+# 2) apply it to your three columns; this gives a 6×3 matrix
+stats_mat <- sapply(dt[, .(Age, ApacheIIScore, BMI)], calc_stats)
+
+# 3) turn it into a data.table, with the rownames as a “Statistic” column
+summary_table <- as.data.table(stats_mat, keep.rownames="Statistic")
+
+# 4) rename the numeric columns to match your table header
+setnames(summary_table,
+         old = c("Statistic","Age","ApacheIIScore","BMI"),
+         new = c("Statistik","Alter","ApacheIIScore","BMI"))
+
+# Turn your data into a table grob
+tbl <- tableGrob(summary_table, rows = NULL)
+
+# measure it (in inches)
+table_w <- convertWidth(sum(tbl$widths),  "inches", valueOnly = TRUE)
+table_h <- convertHeight(sum(tbl$heights),"inches", valueOnly = TRUE)
+
+# # Save as PNG
+png(
+  filename = "summary_table.png",
+  width    = table_w,   # in inches
+  height   = table_h,   # in inches
+  units    = "in",      # interpret width/height in inches
+  res      = 300        # DPI
+)
+grid.table(summary_table, rows = NULL)
+
+# close the device
+dev.off()
+
+print(summary_table)
+```
+
+```{r}
+library(data.table)
+library(ggplot2)
+
+# 1) ensure result is a data.table & melt long
+setDT(dt)
+long <- melt(dt,
+             measure.vars = c("Age", "ApacheIIScore", "BMI"),
+             variable.name = "Variable",
+             value.name    = "Value")
+
+# 2) compute just Mean and Median for each Variable
+stats_mat <- sapply(dt[, .(Age, ApacheIIScore, BMI)], function(x) {
+  c(Median = median(x, na.rm=TRUE),
+    Mean   = mean(x,   na.rm=TRUE))
+})
+stats_dt <- as.data.table(stats_mat, keep.rownames="Statistic")
+stats_dt <- melt(stats_dt,
+                 id.vars       = "Statistic",
+                 variable.name = "Variable",
+                 value.name    = "StatValue")
+# keep only Mean & Median
+stats_dt <- stats_dt[Statistic %in% c("Mean","Median")]
+
+# 3) plot
+ggplot(long, aes(x = Value)) +
+  geom_density(size = 1) +
+  facet_wrap(~ Variable, scales = "free")+
+  theme(legend.position = "bottom",
+        plot.title     = element_text(hjust = 0.5),
+        axis.title       = element_blank()) +
+  theme_bw()
+```
+
+```{r}
+#Protein intake was assessed in 9068 patients who met our inclusion criteria. Of these #patients, x patients (x%) died in hospital after 96 hours but within 30 days after ICU #admission
+dt
+result_died <- dt[event >= 4 & event <= 30 & PatientDied == 1]
+nrow(result_died)
+nrow(result_died)/nrow(dt)
+median(result_died$event)
+quantile(result_died$event, probs = c(0.25, 0.75))
+
+result_discharged <- dt[event >= 4 & event <= 30 & PatientDischarged == 1]
+nrow(result_discharged)
+nrow(result_discharged)/nrow(dt)
+median(result_discharged$event)
+quantile(result_discharged$event, probs = c(0.25, 0.75))
+
+median(result_discharged$DaysMechVent)
+quantile(result_discharged$DaysMechVent, probs = c(0.25, 0.75))
+
+
+```
+

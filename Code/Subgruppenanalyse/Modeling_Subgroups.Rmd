@@ -1,0 +1,547 @@
+---
+title: "Subgroup analysis"
+output: pdf_document
+date: "2025-03-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(pammtools)
+library(dplyr)
+library(tidyr)
+library(mgcv)
+library(ggplot2)
+library(purrr)
+library(here)
+
+set.seed(123)
+```
+
+```{r}
+# read in Data
+data_original<- readRDS(here("Daten", "Daten_verarbeitet", "data_overweight_cens.rds"))
+
+# Adjusting data for PED format
+data <- data_original %>% 
+  filter(Study_Day == 1)
+
+# New columns for Discharged und Died
+data <- data %>% 
+  mutate(discharged_0to30 = ifelse(status_0to30 == 1, 1, 0),    # 1, when patient was discharged
+         died_0to30 = ifelse(status_0to30 == 2, 1, 0),          # 1, when patient has died
+         avDCI_Cat = avDCI <= 16,
+         avDCI_Cat = factor(avDCI_Cat, levels = c(TRUE, FALSE), labels = c(0, 1))
+         )
+```
+
+```{r}
+# Divide data into two groups (avDCI <= 16 and avDCI > 16)
+data_smaller16 <- data %>% 
+  filter(avDCI <= 16)
+data_bigger16 <- data %>% 
+  filter(avDCI > 16)
+```
+
+```{r}
+# Models for Died und Discharged (for both groups of avDCI)
+# Datasets for avDCI <= 16 (not stacked variant)
+ped_cr_not_stacked_smaller <- as_ped(data = data_smaller16,
+                                     formula = Surv(surv_0to30, status_0to30) ~ Age + BMI +
+                                       ApacheIIScore + OralIntake2_4 + PN2_4 + inMV2_4 +
+                                       Propofol2_4 + Year + DiagID2 + AdmCatID + Gender +
+                                       CombinedicuID + avDPI + avDCI + avDCI_Cat,
+                                     cut = 0:30,
+                                     id = "CombinedID",
+                                     combine = FALSE)
+ped_cr_not_stacked_smaller[[1]] <- ped_cr_not_stacked_smaller[[1]][ped_cr_not_stacked_smaller[[1]]$tend >= 9, ]
+ped_cr_not_stacked_smaller[[2]] <- ped_cr_not_stacked_smaller[[2]][ped_cr_not_stacked_smaller[[2]]$tend >= 9, ]
+
+ped_discharged_smaller <- ped_cr_not_stacked_smaller[[1]]
+ped_died_smaller <- ped_cr_not_stacked_smaller[[2]]
+
+# Datasets for acDCI > 16 (not stacked variant)
+ped_cr_not_stacked_bigger <- as_ped(data = data_bigger16,
+                                    formula = Surv(surv_0to30, status_0to30) ~ Age + BMI +
+                                      ApacheIIScore + OralIntake2_4 + PN2_4 + inMV2_4 +
+                                      Propofol2_4 + Year + DiagID2 + AdmCatID + Gender +
+                                      CombinedicuID + avDPI + avDCI + avDCI_Cat,
+                                    cut = 0:30,
+                                    id = "CombinedID",
+                                    combine = FALSE)
+ped_cr_not_stacked_bigger[[1]] <- ped_cr_not_stacked_bigger[[1]][ped_cr_not_stacked_bigger[[1]]$tend >= 9, ]
+ped_cr_not_stacked_bigger[[2]] <- ped_cr_not_stacked_bigger[[2]][ped_cr_not_stacked_bigger[[2]]$tend >= 9, ]
+
+ped_discharged_bigger <- ped_cr_not_stacked_bigger[[1]]
+ped_died_bigger <- ped_cr_not_stacked_bigger[[2]]
+```
+
+```{r}
+# Model for avDCI <= 16
+model_cr_not_stacked_smaller <- map(ped_cr_not_stacked_smaller, ~ bam(ped_status ~ s(tend, bs = "ps") +
+                                  s(Age, bs = "ps") + s(BMI, bs = "ps") + ApacheIIScore +
+                                  OralIntake2_4 + PN2_4 + inMV2_4 + Propofol2_4 + Year +
+                                  DiagID2 + AdmCatID + Gender +
+                                  s(CombinedicuID, bs = "re") +
+                                  s(avDPI, bs = "ps"),
+                              data = .x,
+                              family = poisson(),
+                              offset = offset,
+                              discrete = TRUE)
+                            )
+model_discharged_smaller <- model_cr_not_stacked_smaller[[1]]
+model_died_smaller <- model_cr_not_stacked_smaller[[2]]
+
+map(model_cr_not_stacked_smaller, summary)
+```
+
+```{r}
+# Model for avDCI > 16
+model_cr_not_stacked_bigger <- map(ped_cr_not_stacked_bigger, ~ bam(ped_status ~ s(tend, bs = "ps") +
+                                 s(Age, bs = "ps") + s(BMI, bs = "ps") + ApacheIIScore +
+                                 OralIntake2_4 + PN2_4 + inMV2_4 + Propofol2_4 + Year +
+                                 DiagID2 + AdmCatID + Gender +
+                                 s(CombinedicuID, bs = "re") +
+                                 s(avDPI, bs = "ps"),
+                              data = .x,
+                              family = poisson(),
+                              offset = offset,
+                              discrete = TRUE)
+                            )
+model_discharged_bigger <- model_cr_not_stacked_bigger[[1]]
+model_died_bigger <- model_cr_not_stacked_bigger[[2]]
+
+map(model_cr_not_stacked_bigger, summary)
+```
+
+```{r}
+# Discharged and avDCI <= 16
+# Visualize splines for BMI, Age, avDPI
+# Visualize QQ-plot for CombinedicuID
+bmi_discharged_smaller <- ped_discharged_smaller %>% 
+  make_newdata(BMI = seq_range(BMI, n = 100)) %>% 
+  add_term(model_discharged_smaller, term = "BMI")
+gg_bmi_discharged_smaller <- ggplot(bmi_discharged_smaller, aes(x = BMI, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "darkblue") +
+  geom_ribbon(alpha = 0.2, fill = "darkblue") +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.title.y = element_blank()) +
+  labs(y = "Log Hazard Rate")
+gg_bmi_discharged_smaller # basically linear
+
+age_discharged_smaller <- ped_discharged_smaller %>% 
+  make_newdata(Age = seq_range(Age, n = 100)) %>% 
+  add_term(model_discharged_smaller, term = "Age")
+gg_age_discharged_smaller <- ggplot(age_discharged_smaller, aes(x = Age, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "darkblue") +
+  geom_ribbon(alpha = 0.2, fill = "darkblue") +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.title.y = element_blank()) +
+  labs(y = "Log Hazard Rate")
+gg_age_discharged_smaller # basically linear
+
+avDPI_discharged_smaller <- ped_discharged_smaller %>% 
+  make_newdata(avDPI = seq_range(avDPI, n = 100)) %>% 
+  add_term(model_discharged_smaller, term = "avDPI")
+gg_avDPI_discharged_smaller <- ggplot(avDPI_discharged_smaller, aes(x = avDPI, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "darkblue") +
+  geom_ribbon(alpha = 0.2, fill = "darkblue") +
+  ylim(-0.5, 0.75) +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.title.y = element_blank()) +
+  labs(y = "Log Hazard Rate")
+gg_avDPI_discharged_smaller # basically linear
+
+QQ_plot_discharged_smaller <- gg_re(model_discharged_smaller) +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.title.y = element_blank()) +
+  labs(x = "theoretische Quantile",
+       y = "echte Quantile")
+QQ_plot_discharged_smaller
+
+# Hazard
+hazard_discharged_smaller <- make_newdata(ped_discharged_smaller, tend = unique(tend)) %>% 
+  add_hazard(model_discharged_smaller)
+gg_hazard_discharged_smaller <- ggplot(hazard_discharged_smaller, aes(x = tend, y = hazard)) +
+  geom_stephazard(color = "darkblue") +
+  ylim(0, 0.08) +
+  xlim(9, 30) +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.title.y = element_blank()) +
+  labs(x = "Tag",
+       y = "Log Hazard Rate")
+gg_hazard_discharged_smaller
+
+# Cumulative Hazard
+hazard_cumu_discharged_smaller <- make_newdata(ped_discharged_smaller, tend = unique(tend)) %>% 
+  add_cumu_hazard(model_discharged_smaller)
+gg_hazard_cumu_discharged_smaller <- ggplot(hazard_cumu_discharged_smaller, aes(x = tend, y = cumu_hazard)) +
+  geom_hazard()
+gg_hazard_cumu_discharged_smaller
+```
+
+```{r}
+# Died and avDCI <= 16
+# Visualize splines for BMI, Age, avDPI
+# Visualize QQ-plot for CombinedicuID
+bmi_died_smaller <- ped_died_smaller %>% 
+  make_newdata(BMI = seq_range(BMI, n = 100)) %>% 
+  add_term(model_died_smaller, term = "BMI")
+gg_bmi_died_smaller <- ggplot(bmi_died_smaller, aes(x = BMI, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "red") +
+  geom_ribbon(alpha = 0.2, fill = "red") +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  labs(y = "Log Hazard Rate")
+gg_bmi_died_smaller # basically linear
+
+age_died_smaller <- ped_died_smaller %>% 
+  make_newdata(Age = seq_range(Age, n = 100)) %>% 
+  add_term(model_died_smaller, term = "Age")
+gg_age_died_smaller <- ggplot(age_died_smaller, aes(x = Age, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "red") +
+  geom_ribbon(alpha = 0.2, fill = "red") +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  labs(y = "Log Hazard Rate")
+gg_age_died_smaller # basically linear
+
+avDPI_died_smaller <- ped_died_smaller %>% 
+  make_newdata(avDPI = seq_range(avDPI, n = 100)) %>% 
+  add_term(model_died_smaller, term = "avDPI")
+gg_avDPI_died_smaller <- ggplot(avDPI_died_smaller, aes(x = avDPI, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "red") +
+  geom_ribbon(alpha = 0.2, fill = "red") +
+  ylim(-1.75, 4.25) +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  labs(y = "Log Hazard Rate")
+gg_avDPI_died_smaller # basically linear
+
+QQ_plot_died_smaller <- gg_re(model_died_smaller) +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  labs(x = "theoretische Quantile",
+       y = "echte Quantile")
+QQ_plot_died_smaller
+
+# Hazard
+hazard_died_smaller <- make_newdata(ped_died_smaller, tend = unique(tend)) %>% 
+  add_hazard(model_died_smaller)
+gg_hazard_died_smaller <- ggplot(hazard_died_smaller, aes(x = tend, y = hazard)) +
+  geom_stephazard(color = "red") +
+  ylim(0, 0.08) +
+  xlim(9, 30) +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  labs(x = "Tag",
+       y = "Log Hazard Rate")
+gg_hazard_died_smaller
+
+# Cumulative Hazard
+hazard_cumu_died_smaller <- make_newdata(ped_died_smaller, tend = unique(tend)) %>% 
+  add_cumu_hazard(model_died_smaller)
+gg_hazard_cumu_died_smaller <- ggplot(hazard_cumu_died_smaller, aes(x = tend, y = cumu_hazard)) +
+  geom_hazard()
+gg_hazard_cumu_died_smaller
+```
+
+```{r}
+# Discharged and avDCI > 16
+# Visualize splines for BMI, Age, avDPI
+# Visualize QQ-plot for CombinedicuID
+bmi_discharged_bigger <- ped_discharged_bigger %>% 
+  make_newdata(BMI = seq_range(BMI, n = 100)) %>% 
+  add_term(model_discharged_bigger, term = "BMI")
+gg_bmi_discharged_bigger <- ggplot(bmi_discharged_bigger, aes(x = BMI, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "darkblue") +
+  geom_ribbon(alpha = 0.2, fill = "darkblue")  +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.title.y = element_blank()) +
+  labs(y = "Log Hazard Rate")
+gg_bmi_discharged_bigger # basically linear
+
+age_discharged_bigger <- ped_discharged_bigger %>% 
+  make_newdata(Age = seq_range(Age, n = 100)) %>% 
+  add_term(model_discharged_bigger, term = "Age")
+gg_age_discharged_bigger <- ggplot(age_discharged_bigger, aes(x = Age, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "darkblue") +
+  geom_ribbon(alpha = 0.2, fill = "darkblue") +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.title.y = element_blank()) +
+  labs(y = "Log Hazard Rate")
+gg_age_discharged_bigger
+
+avDPI_discharged_bigger <- ped_discharged_bigger %>% 
+  make_newdata(avDPI = seq_range(avDPI, n = 100)) %>% 
+  add_term(model_discharged_bigger, term = "avDPI")
+gg_avDPI_discharged_bigger <- ggplot(avDPI_discharged_bigger, aes(x = avDPI, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "darkblue") +
+  geom_ribbon(alpha = 0.2, fill = "darkblue") +
+  ylim(-0.5, 0.75) +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.title.y = element_blank()) +
+  labs(y = "Log Hazard Rate")
+gg_avDPI_discharged_bigger # basically linear
+
+QQ_plot_discharged_bigger <- gg_re(model_discharged_bigger) +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.title.y = element_blank()) +
+  labs(x = "theoretische Quantile",
+       y = "echte Quantile")
+QQ_plot_discharged_bigger
+
+# Hazard
+hazard_discharged_bigger <- make_newdata(ped_discharged_bigger, tend = unique(tend)) %>% 
+  add_hazard(model_discharged_bigger)
+gg_hazard_discharged_bigger <- ggplot(hazard_discharged_bigger, aes(x = tend, y = hazard)) +
+  geom_stephazard(color = "darkblue") +
+  ylim(0, 0.08) +
+  xlim(9, 30) +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.title.y = element_blank()) +
+  labs(x = "Tag",
+       y = "Log Hazard Rate")
+gg_hazard_discharged_bigger
+
+# Cumulative Hazard
+hazard_cumu_discharged_bigger <- make_newdata(ped_discharged_bigger, tend = unique(tend)) %>% 
+  add_cumu_hazard(model_discharged_bigger)
+gg_hazard_cumu_discharged_bigger <- ggplot(hazard_cumu_discharged_bigger, aes(x = tend, y = cumu_hazard)) +
+  geom_hazard()
+gg_hazard_cumu_discharged_bigger
+```
+
+```{r}
+# Died and avDCI > 16
+# Visualize splines for BMI, Age, avDPI
+# Visualize QQ-plot for CombinedicuID
+bmi_died_bigger <- ped_died_bigger %>% 
+  make_newdata(BMI = seq_range(BMI, n = 100)) %>% 
+  add_term(model_died_bigger, term = "BMI")
+gg_bmi_died_bigger <- ggplot(bmi_died_bigger, aes(x = BMI, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "red") +
+  geom_ribbon(alpha = 0.2, fill = "red") +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  labs(y = "Log Hazard Rate")
+gg_bmi_died_bigger # basically linear
+
+age_died_bigger <- ped_died_bigger %>% 
+  make_newdata(Age = seq_range(Age, n = 100)) %>% 
+  add_term(model_died_bigger, term = "Age")
+gg_age_died_bigger <- ggplot(age_died_bigger, aes(x = Age, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "red") +
+  geom_ribbon(alpha = 0.2, fill = "red") +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  labs(y = "Log Hazard Rate")
+gg_age_died_bigger
+
+avDPI_died_bigger <- ped_died_bigger %>% 
+  make_newdata(avDPI = seq_range(avDPI, n = 100)) %>% 
+  add_term(model_died_bigger, term = "avDPI")
+gg_avDPI_died_bigger <- ggplot(avDPI_died_bigger, aes(x = avDPI, ymin = ci_lower, ymax = ci_upper)) +
+  geom_line(aes(y = fit), color = "red") +
+  geom_ribbon(alpha = 0.2, fill = "red") +
+  ylim(-1.75, 4.25) +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  labs(x = "avDPI",
+       y = "Log Hazard Rate")
+gg_avDPI_died_bigger
+
+QQ_plot_died_bigger <- gg_re(model_died_bigger) +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  labs(x = "theoretische Quantile",
+       y = "echte Quantile")
+QQ_plot_died_bigger
+
+# Hazard
+hazard_died_bigger <- make_newdata(ped_died_bigger, tend = unique(tend)) %>% 
+  add_hazard(model_died_bigger)
+gg_hazard_died_bigger <- ggplot(hazard_died_bigger, aes(x = tend, y = hazard)) +
+  geom_stephazard(color = "red") +
+  ylim(0, 0.08) +
+  xlim(9, 30) +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  labs(x = "Tag",
+       y = "Log Hazard Rate")
+gg_hazard_died_bigger
+
+# Cumulative Hazard
+hazard_cumu_died_bigger <- make_newdata(ped_died_bigger, tend = unique(tend)) %>% 
+  add_cumu_hazard(model_died_bigger)
+gg_hazard_cumu_died_bigger <- ggplot(hazard_cumu_died_bigger, aes(x = tend, y = cumu_hazard)) +
+  geom_hazard()
+gg_hazard_cumu_died_bigger
+```
+
+```{r}
+# Forest Plots for fixed effects for Discharged (both groups)
+forest_discharged_smaller <- gg_fixed(model_discharged_smaller)
+forest_discharged_bigger <- gg_fixed(model_discharged_bigger)
+forest_discharged_smaller
+forest_discharged_bigger
+```
+
+```{r}
+# Forest Plots for fixed effects for Died (both groups)
+forest_died_smaller <- gg_fixed(model_died_smaller)
+forest_died_bigger <- gg_fixed(model_died_bigger)
+forest_died_smaller
+forest_died_bigger
+```
+
+```{r}
+# Hazards (one plot per group)
+hazard_both_smaller <- hazard_discharged_smaller %>% 
+  rename(hazard_discharged = hazard) %>% 
+  mutate(hazard_died = hazard_died_smaller$hazard)
+gg_hazard_both_smaller <- ggplot(hazard_both_smaller, aes(x = tend)) +
+  geom_stephazard(aes(y = hazard_discharged), color = "darkblue") +
+  geom_stephazard(aes(y = hazard_died), color = "red") +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  ylim(0, 0.08) +
+  xlim(9, 30) +
+  labs(title = "Niedrige avDCI (n = 4244)",
+       x = "Tag",
+       y = "Log Hazard Rate")
+gg_hazard_both_smaller
+
+hazard_both_bigger <- hazard_discharged_bigger %>% 
+  rename(hazard_discharged = hazard) %>% 
+  mutate(hazard_died = hazard_died_bigger$hazard)
+gg_hazard_both_bigger <- ggplot(hazard_both_bigger, aes(x = tend)) +
+  geom_stephazard(aes(y = hazard_discharged), color = "darkblue") +
+  geom_stephazard(aes(y = hazard_died), color = "red") +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  ylim(0, 0.08) +
+  xlim(9, 30) +
+  labs(title = "Hohe avDCI (n = 4824)",
+       x = "Tag",
+       y = "Log Hazard Rate")
+gg_hazard_both_bigger
+```
+
+```{r}
+# Competing Risk
+# Dataset for avDCI <= 16 (stacked variant)
+ped_cr_stacked_smaller <- as_ped(data = data_smaller16,
+                         formula = Surv(surv_0to30, status_0to30) ~ Age + BMI +
+                           ApacheIIScore + OralIntake2_4 + PN2_4 + inMV2_4 +
+                           Propofol2_4 + Year + DiagID2 + AdmCatID + Gender +
+                           CombinedicuID + avDPI + avDCI + avDCI_Cat,
+                         cut = 0:30,
+                         id = "CombinedID",
+                         combine = TRUE) %>% 
+  mutate(cause = as.factor(cause))
+ped_cr_stacked_smaller <- ped_cr_stacked_smaller[ped_cr_stacked_smaller$tend >= 9, ]
+
+# Model (stacked)
+model_cr_stacked_smaller <- pamm(ped_status ~ s(tend, bs = "ps", by = cause) + s(Age, bs = "ps", by = cause) +
+                            s(BMI, bs = "ps", by = cause) + ApacheIIScore + ApacheIIScore:cause +
+                            OralIntake2_4 + OralIntake2_4:cause + PN2_4 + PN2_4:cause +
+                            inMV2_4 + inMV2_4:cause + Propofol2_4 + Propofol2_4:cause +
+                            Year + Year:cause + DiagID2 + DiagID2:cause +
+                            AdmCatID + AdmCatID:cause + Gender + Gender:cause +
+                            s(CombinedicuID, bs = "re", by = cause) +
+                            s(avDPI, bs = "ps", by = cause),
+                          data = ped_cr_stacked_smaller,
+                          family = poisson(),
+                          offset = offset,
+                          engine = "bam",
+                          discrete = TRUE)
+summary(model_cr_stacked_smaller)
+```
+
+```{r}
+# Competing Risk
+# Dataset for avDCI > 16 (stacked variant)
+ped_cr_stacked_bigger <- as_ped(data = data_bigger16,
+                                 formula = Surv(surv_0to30, status_0to30) ~ Age + BMI +
+                                   ApacheIIScore + OralIntake2_4 + PN2_4 + inMV2_4 +
+                                   Propofol2_4 + Year + DiagID2 + AdmCatID + Gender +
+                                   CombinedicuID + avDPI + avDCI + avDCI_Cat,
+                                 cut = 0:30,
+                                 id = "CombinedID",
+                                 combine = TRUE) %>% 
+  mutate(cause = as.factor(cause))
+ped_cr_stacked_bigger <- ped_cr_stacked_bigger[ped_cr_stacked_bigger$tend >= 9, ]
+
+# Model (stacked)
+model_cr_stacked_bigger <- pamm(ped_status ~ s(tend, bs = "ps", by = cause) + s(Age, bs = "ps", by = cause) +
+                                   s(BMI, bs = "ps", by = cause) + ApacheIIScore + ApacheIIScore:cause +
+                                   OralIntake2_4 + OralIntake2_4:cause + PN2_4 + PN2_4:cause +
+                                   inMV2_4 + inMV2_4:cause + Propofol2_4 + Propofol2_4:cause +
+                                   Year + Year:cause + DiagID2 + DiagID2:cause +
+                                   AdmCatID + AdmCatID:cause + Gender + Gender:cause +
+                                   s(CombinedicuID, bs = "re", by = cause) +
+                                   s(avDPI, bs = "ps", by = cause),
+                                 data = ped_cr_stacked_bigger,
+                                 family = poisson(),
+                                 offset = offset,
+                                 engine = "bam",
+                                 discrete = TRUE)
+summary(model_cr_stacked_bigger)
+```
+
+```{r}
+# CIF for avDCI <= 16
+cif_df_smaller <- ped_cr_stacked_smaller %>% 
+  make_newdata(tend = unique(tend), cause = unique(cause)) %>% 
+  group_by(cause) %>% 
+  add_cif(model_cr_stacked_smaller)
+gg_cr_smaller <- ggplot(cif_df_smaller, aes(x = tend, y = cif)) +
+  geom_line(aes(col = cause)) +
+  geom_ribbon(aes(ymin = cif_lower, ymax = cif_upper, fill = cause),
+              alpha = 0.3) +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        legend.position = "None") +
+  labs(x = "Tag",
+       y = "CIF",
+       fill = "Event",
+       color = "Event") +
+  scale_fill_manual(labels = c("Entlassen", "Gestorben"), values = c("darkblue", "red")) +
+  scale_color_manual(labels = c("Entlassen", "Gestorben"), values = c("darkblue", "red"))
+gg_cr_smaller
+```
+
+```{r}
+# CIF for avDCI > 16
+cif_df_bigger <- ped_cr_stacked_bigger %>% 
+  make_newdata(tend = unique(tend), cause = unique(cause)) %>% 
+  group_by(cause) %>% 
+  add_cif(model_cr_stacked_bigger)
+gg_cr_bigger <- ggplot(cif_df_bigger, aes(x = tend, y = cif)) +
+  geom_line(aes(col = cause)) +
+  geom_ribbon(aes(ymin = cif_lower, ymax = cif_upper, fill = cause),
+              alpha = 0.3) +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.title.y = element_blank()) +
+  labs(x = "Tag",
+       y = "CIF",
+       fill = "Event",
+       color = "Event") +
+  scale_fill_manual(labels = c("Entlassen", "Gestorben"), values = c("darkblue", "red")) +
+  scale_color_manual(labels = c("Entlassen", "Gestorben"), values = c("darkblue", "red"))
+gg_cr_bigger
+```

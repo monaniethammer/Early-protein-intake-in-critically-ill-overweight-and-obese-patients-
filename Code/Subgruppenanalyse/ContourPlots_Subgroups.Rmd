@@ -1,0 +1,156 @@
+---
+title: "ContourPlots_Subgruppen"
+output: pdf_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(mgcv)
+library(ggplot2)
+library(purrr)
+library(tm)
+#install up to date version to cope with bugs in the visualization of Contourplots
+#remotes::install_github("adibender/pammtools")
+library(pammtools)
+library(viridis)
+library(here)
+```
+
+```{r Daten vorbereiten}
+# read in Data
+data_original<- readRDS(here("Daten", "Daten_verarbeitet", "data_overweight_cens.rds"))
+# filter first study day
+data <- data_original %>% 
+  filter(Study_Day == 1)
+
+# add Columnes for discharged and died
+data <- data %>% 
+  mutate(discharged_0to30 = ifelse(status_0to30 == 1, 1, 0),    # if 1 then patient discharged
+         died_0to30 = ifelse(status_0to30 == 2, 1, 0),          # if 1 then patient died
+         avDPI_Cat = avDPI < 1.2,
+         avDPI_Cat = factor(avDPI_Cat, levels = c(TRUE, FALSE), labels = c("Low", "High")))
+
+# 
+data_smaller16 <- data %>% 
+  filter(avDCI <= 16)
+data_bigger16 <- data %>% 
+  filter(avDCI > 16)
+```
+
+```{r, color sceme}
+color_sceme <- "D" # Options: "A", "B", "C", "D", "E", "magma", "plasma"
+```
+
+```{r, transition Probability avDCI <= 16}
+# convert data in ped format
+ped_data_smaller <- as_ped(data = data_smaller16,
+                 formula = Surv(surv_0to30, status_0to30) ~ Age + BMI + ApacheIIScore + OralIntake2_4 + PN2_4 +
+                   inMV2_4 + Propofol2_4 + Year + DiagID2 +AdmCatID + Gender + CombinedicuID + icuByDummy + avDPI + avDPI_Cat + avDCI,
+                 cut = 0:31,
+                 id = "CombinedID",
+                 combine = TRUE) %>% 
+  mutate(cause = as.factor(cause))
+
+# create columne with transition probability
+# AI used
+ped_data_smaller <- ped_data_smaller %>%
+  mutate(transition = paste0(0, "->", cause),
+         transition = as.factor(transition))
+
+# fit bam modell
+pam_smaller <- bam(ped_status ~ te(tend, avDPI , by=transition) + transition + s(tend, bs = "ps") +
+                                s(Age, bs = "ps") + s(BMI, bs = "ps") + ApacheIIScore +
+                                OralIntake2_4 + PN2_4 + inMV2_4 + Propofol2_4 + Year +
+                                DiagID2 + AdmCatID + Gender +
+                                s(CombinedicuID, bs = "re") + s(avDPI, bs = "ps"),
+                    data = ped_data_smaller,
+                    family = poisson(),
+                    offset=offset,
+                    discrete = TRUE)
+
+# create data format for contour plot
+# AI used
+make_data_TP_smaller <- make_newdata(ped_data_smaller
+                            , tend = unique(tend)
+                            , transition=unique(transition)
+                            , avDPI = seq(0, 6, by = 0.1)) %>%
+                            group_by(transition, avDPI) %>%
+                            add_trans_prob(pam_smaller)
+
+# swap "verstorben" from right to left in plot
+make_data_TP_smaller$transition <- factor(make_data_TP_smaller$transition, levels = c("0->2", "0->1"))
+
+# create Contour Plot
+plot_trans_prob_smaller <- ggplot(make_data_TP_smaller, aes(x=tend, y=avDPI, z=trans_prob)) +
+                    geom_tile(aes(fill=trans_prob)) +
+                    scale_fill_viridis(name = "Übergangs-\nwahrscheinlichkeit", option = color_sceme) +
+                    stat_contour(col="black",bins = 15, lwd = 0.5) +
+                    facet_wrap(~ transition
+                    , ncol=2
+                    , labeller = as_labeller(c("0->1" = "Entlassen", "0->2" = "Verstorben"))
+                    ) +
+                    xlim(c(9, 31)) +
+                    xlab("Tag") +
+                    ylab("avDPI")
+                    theme_bw() 
+plot_trans_prob_smaller
+```
+
+
+```{r, transition Probability avDCI > 16}
+# convert data in ped format
+ped_data_bigger <- as_ped(data = data_bigger16,
+                 formula = Surv(surv_0to30, status_0to30) ~ Age + BMI + ApacheIIScore + OralIntake2_4 + PN2_4 +
+                   inMV2_4 + Propofol2_4 + Year + DiagID2 +AdmCatID + Gender + CombinedicuID + icuByDummy + avDPI + avDPI_Cat + avDCI,
+                 cut = 0:31,
+                 id = "CombinedID",
+                 combine = TRUE) %>% 
+  mutate(cause = as.factor(cause))
+
+# create columne with transition probability
+# AI used
+ped_data_bigger <- ped_data_bigger %>%
+  mutate(transition = paste0(0, "->", cause),
+         transition = as.factor(transition))
+
+# fit bam modell
+pam_bigger <- bam(ped_status ~ te(tend, avDPI , by=transition) + transition + s(tend, bs = "ps") +
+                                s(Age, bs = "ps") + s(BMI, bs = "ps") + ApacheIIScore +
+                                OralIntake2_4 + PN2_4 + inMV2_4 + Propofol2_4 + Year +
+                                DiagID2 + AdmCatID + Gender +
+                                s(CombinedicuID, bs = "re") + s(avDPI, bs = "ps"),
+                    data = ped_data_bigger,
+                    family = poisson(),
+                    offset=offset,
+                    discrete = TRUE)
+
+# create data format for contour plot
+# AI used
+make_data_TP_bigger <- make_newdata(ped_data_bigger
+                            , tend = unique(tend)
+                            , transition=unique(transition)
+                            , avDPI = seq(0, 6, by = 0.1)) %>%
+                            group_by(transition, avDPI) %>%
+                            add_trans_prob(pam_bigger)
+
+# swap "verstorben" from right to left in plot
+make_data_TP_bigger$transition <- factor(make_data_TP_bigger$transition, levels = c("0->2", "0->1"))
+
+# create Contour Plot
+plot_trans_prob_bigger <- ggplot(make_data_TP_bigger, aes(x=tend, y=avDPI, z=trans_prob)) +
+                    geom_tile(aes(fill=trans_prob)) +
+                    scale_fill_viridis(name = "Übergangs-\nwahrscheinlichkeit", option = color_sceme) +
+                    stat_contour(col="black",bins = 15, lwd = 0.5) +
+                    facet_wrap(~ transition
+                    , ncol=2
+                    , labeller = as_labeller(c("0->1" = "Entlassen", "0->2" = "Verstorben"))
+                    ) +
+                    xlim(c(9, 31)) +
+                    xlab("Tag") +
+                    ylab("avDPI") +
+                    theme_bw() 
+plot_trans_prob_bigger
+```

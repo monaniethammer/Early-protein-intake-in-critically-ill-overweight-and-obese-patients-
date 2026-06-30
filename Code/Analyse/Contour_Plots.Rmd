@@ -1,0 +1,168 @@
+---
+title: "ContourPlots"
+output: pdf_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(mgcv)
+library(ggplot2)
+library(purrr)
+library(tm)
+#install up to date version to cope with bugs in the visualization of Contourplots
+#remotes::install_github("adibender/pammtools")
+library(pammtools)
+library(viridis)
+library(here)
+```
+
+```{r Daten vorbereiten}
+# read in Data
+data_original<- readRDS(here("Daten", "Daten_verarbeitet", "data_overweight_cens.rds"))
+
+# filter first study day
+data <- data_original %>% 
+  filter(Study_Day == 1)
+
+# add Columnes for discharged and died
+data <- data %>% 
+  mutate(discharged_0to30 = ifelse(status_0to30 == 1, 1, 0),    # wenn 1, dann wurde Patient discharged
+         died_0to30 = ifelse(status_0to30 == 2, 1, 0),          # wenn 1, dann ist PAtient gestorben
+         avDPI_Cat = avDPI < 1.2,
+         avDPI_Cat = factor(avDPI_Cat, levels = c(TRUE, FALSE), labels = c("Low", "High")))
+
+# convert data in ped format
+ped_data <- as_ped(data = data,
+                 formula = Surv(surv_0to30, status_0to30) ~ Age + BMI + ApacheIIScore + OralIntake2_4 + PN2_4 +
+                   inMV2_4 + Propofol2_4 + Year + DiagID2 +AdmCatID + Gender + CombinedicuID + icuByDummy + avDPI + avDPI_Cat + avDCI,
+                 cut = 0:31,
+                 id = "CombinedID",
+                 combine = TRUE) %>% 
+  mutate(cause = as.factor(cause))
+
+# create columne with transition probability
+# AI used
+ped_data <- ped_data %>%
+  mutate(transition = paste0(0, "->", cause),
+         transition = as.factor(transition))
+```
+
+```{r, color sceme}
+color_sceme <- "D" # Options: "A", "B", "C", "D", "E", "magma", "plasma"
+```
+
+```{r, transition Probability avDPI}
+# fit bam modell
+pam <- bam(ped_status ~ te(tend, avDPI , by=transition) + transition + s(tend, bs = "ps") +
+                                s(Age, bs = "ps") + s(BMI, bs = "ps") + ApacheIIScore +
+                                OralIntake2_4 + PN2_4 + inMV2_4 + Propofol2_4 + Year +
+                                DiagID2 + AdmCatID + Gender +
+                                s(CombinedicuID, bs = "re") + s(avDPI, bs = "ps"),
+                    data = ped_data,
+                    family = poisson(),
+                    offset=offset,
+                    discrete = TRUE)
+
+# create data format for contour plot
+# AI used
+make_data_TP <- make_newdata(ped_data
+                            , tend = unique(tend)
+                            , transition=unique(transition)
+                            , avDPI = seq(0, 6, by = 0.1)) %>%
+                            group_by(transition, avDPI) %>%
+                            add_trans_prob(pam)
+
+# swap "verstorben" from right to left in visual
+make_data_TP$transition <- factor(make_data_TP$transition, levels = c("0->2", "0->1"))
+
+# create Contour Plot
+plot_trans_prob <- ggplot(make_data_TP, aes(x=tend, y=avDPI, z=trans_prob)) +
+                    geom_tile(aes(fill=trans_prob)) +
+                    scale_fill_viridis(name = "Übergangs-\nwahrscheinlichkeit", option = color_sceme) + 
+                    stat_contour(col="black",bins = 15, lwd = 0.5) +
+                    facet_wrap(~ transition
+                    , ncol=2
+                    , labeller = as_labeller(c("0->1" = "Entlassen", "0->2" = "Verstorben"))
+                    ) +
+                    xlim(c(9, 31)) +
+                    xlab("Tag") +
+                    ylab("avDPI") +
+                    theme_bw() 
+plot_trans_prob
+```
+
+########################################
+###### Irrelevant for Präsentation #####
+########################################
+
+```{r, cumuHazard}
+# create data format for contour plot
+make_data_hazard <- make_newdata(ped_data
+                            , tend = unique(tend)
+                            , transition=unique(transition)
+                            , avDPI = seq(0, 6, by = 0.1)) %>%
+                            group_by(transition, avDPI) %>%
+                            add_cumu_hazard(pam)
+
+# swap "verstorben" from right to left in plot
+make_data_hazard$transition <- factor(make_data_hazard$transition, levels = c("0->2", "0->1"))
+
+# create Contour Plot
+plot_cumu_hazard <- ggplot(make_data_hazard, aes(x=tend, y=avDPI, z=cumu_hazard)) +
+                    geom_tile(aes(fill=cumu_hazard)) +
+                    scale_fill_viridis(name = "Übergangs-\nwahrscheinlichkeit", option = color_sceme) +
+                    stat_contour(col="black" ,bins = 15, lwd = 0.5) +
+                    facet_wrap(~ transition
+                    , ncol=2
+                    , labeller = as_labeller(c("0->1" = "Entlassen", "0->2" = "Verstorben"))
+                    ) +
+                    xlim(c(9,32)) +
+                    xlab("Tag") +
+                    ylab("avDPI") +
+                    theme_bw()
+plot_cumu_hazard
+```
+
+
+```{r, CIF}
+# fit pamm modell
+# (add cif only works with pamm instead of gam or bam)
+pam_cif <- pamm(ped_status ~ te(tend, avDPI , by=transition) + transition + s(tend, bs = "ps") +
+                                s(Age, bs = "ps") + s(BMI, bs = "ps") + ApacheIIScore +
+                                OralIntake2_4 + PN2_4 + inMV2_4 + Propofol2_4 + Year +
+                                DiagID2 + AdmCatID + Gender +
+                                s(CombinedicuID, bs = "re") + s(avDPI, bs = "ps"),
+                    data = ped_data,
+                    family = poisson(),
+                    offset=offset)
+
+# create data format for contour plot
+# AI used
+make_data_cif<- make_newdata(ped_data
+                            , tend = unique(tend)
+                            , transition=unique(transition)
+                            , avDPI = seq(0, 6, by = 0.1)) %>%
+                            group_by(transition, avDPI) %>%
+                            add_cif(pam_cif)
+
+# swap "verstorben" from right to left in plot
+make_data_cif$transition <- factor(make_data_cif$transition, levels = c("0->2", "0->1"))
+
+# create Contour Plot
+plot_cif <- ggplot(make_data_cif, aes(x=tend, y=avDPI, z=cif)) +
+                    geom_tile(aes(fill=cif)) +
+                    scale_fill_viridis(name = "Übergangs-\nwahrscheinlichkeit", option = color_sceme) +
+                    stat_contour(col="black", bins = 15, lwd = 0.5) +
+                    facet_wrap(~ transition
+                    , ncol=2
+                    , labeller = as_labeller(c("0->1" = "Entlassen", "0->2" = "Verstorben"))
+                    ) +
+                    xlim(c(9,32)) +
+                    xlab("Tag") +
+                    ylab("avDPI") +
+                    theme_bw()
+plot_cif
+```
