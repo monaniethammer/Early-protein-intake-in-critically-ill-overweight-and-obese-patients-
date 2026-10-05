@@ -1,0 +1,5 @@
+"BMI_group","patients","events","person_days","outcome"
+"Overweight",3323,1790,34947.0618055556,"discharged"
+"Obese",2979,1658,32346.25625,"discharged"
+"Overweight",3323,456,34947.0618055556,"died"
+"Obese",2979,384,32346.25625,"died"
